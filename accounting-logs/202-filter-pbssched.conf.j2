@@ -1,0 +1,108 @@
+filter {
+    if [type] == "pbs_accounting" {
+        csv {
+            separator => ";"
+            columns   => ["date", "pbs.event_code", "pbs.job_id", "pbs.job_conf"]
+            quote_char => "%"
+        }
+        kv {
+            source => "pbs.job_conf"
+            include_brackets => false
+            remove_field => "pbs.job_conf"
+            prefix => "pbs.conf."
+        }
+        date {
+            match => ["date", "MM/dd/yyyy HH:mm:ss"]
+        }
+        # for cputime
+        if [pbs.conf.resources_used.cput] {
+            csv {
+                source    => "pbs.conf.resources_used.cput"
+                separator => ":"
+                columns   => ["pbs.conf.cputime.hours", "pbs.conf.cputime.minutes", "pbs.conf.cputime.seconds"]
+                convert   => {
+                    "pbs.conf.cputime.hours" => "integer"
+                    "pbs.conf.cputime.minutes" => "integer"
+                    "pbs.conf.cputime.seconds" => "integer"
+                }
+            }
+            ruby {
+                code => "event.set('pbs.conf.cputime_in_s', event.get('pbs.conf.cputime.hours').to_f * 3600 + event.get('pbs.conf.cputime.minutes').to_f * 60 + event.get('pbs.conf.cputime.seconds').to_f)"
+            }
+            ruby {
+                code => "event.set('pbs.conf.cputime_in_h', (event.get('pbs.conf.cputime_in_s').to_f / 3600).to_f)"
+            }
+        }
+        if [pbs.conf.resources_used.walltime] {
+            csv {
+                source    => "pbs.conf.resources_used.walltime"
+                separator => ":"
+                columns   => ["pbs.conf.walltime.hours", "pbs.conf.walltime.minutes", "pbs.conf.walltime.seconds"]
+                convert   => {
+                    "pbs.conf.walltime.hours" => "integer"
+                    "pbs.conf.walltime.minutes" => "integer"
+                    "pbs.conf.walltime.seconds" => "integer"
+                }
+            }
+            ruby {
+                code => "event.set('pbs.conf.cpuwalltime_in_s', (event.get('pbs.conf.walltime.hours').to_f * 3600 + event.get('pbs.conf.walltime.minutes').to_f * 60 + event.get('pbs.conf.walltime.seconds').to_f) * event.get('pbs.conf.Resource_List.ncpus').to_f)"
+            }
+            ruby {
+                code => "event.set('pbs.conf.cpuwalltime_in_h', (event.get('pbs.conf.cpuwalltime_in_s').to_f / 3600).to_f)"
+            }
+        }
+        
+        # for memory usage, only at the end
+        if [pbs.conf.resources_used.mem] {
+            ruby {
+                code => "event.set('pbs.conf.resources_used.mem_in_B', event.get('pbs.conf.resources_used.mem').gsub('kb', '').to_i * 1024.to_i)"
+            }
+            ruby {
+                code => "event.set('pbs.conf.resources_used.vmem_in_B', event.get('pbs.conf.resources_used.vmem').gsub('kb', '').to_i * 1024.to_i)"
+            }
+            if "kb" in [pbs.conf.Resource_List.mem] {
+                ruby {
+                    code => "event.set('pbs.conf.Resource_List.mem_in_B', event.get('pbs.conf.Resource_List.mem').gsub('kb', '').to_i * 1024.to_i)"
+                }
+            } else if "mb"  in [pbs.conf.Resource_List.mem] {
+                ruby {
+                    code => "event.set('pbs.conf.Resource_List.mem_in_B', event.get('pbs.conf.Resource_List.mem').gsub('mb', '').to_i * 1024 * 1024.to_i)"
+                }
+            } else if "gb"  in [pbs.conf.Resource_List.mem] {
+                ruby {
+                    code => "event.set('pbs.conf.Resource_List.mem_in_B', event.get('pbs.conf.Resource_List.mem').gsub('gb', '').to_i * 1024 * 1024 * 1024.to_i)"
+                }
+            }
+        }
+
+
+        #Remove and convert fields
+        mutate {
+            remove_field => ["host", "message", "pbs.conf.cputime.hours", "pbs.conf.cputime.minutes", "pbs.conf.cputime.seconds", "pbs.conf.walltime.hours", "pbs.conf.walltime.minutes", "pbs.conf.walltime.seconds"]
+            convert => {
+                "pbs.conf.Resource_List.mpiprocs" => "integer"
+                "pbs.conf.Resource_List.ncpus" => "integer"
+                "pbs.conf.ctime" => "integer"
+                "pbs.conf.resource_assigned.ncpus" => "integer"
+                "pbs.conf.start" => "integer"
+                "pbs.conf.etime" => "integer"
+                "pbs.conf.Resource_List.nodect" => "integer"
+                "pbs.conf.Exit_status" => "integer"
+                "pbs.conf.resources_used.ncpus" => "integer"
+                "pbs.conf.run_count" => "integer"
+                "pbs.conf.resources_used.cpupercent" => "float"
+                "pbs.conf.session" => "integer"
+                "pbs.conf.end" => "integer"
+                "pbs.conf.qtime" => "integer"
+            }
+        }
+        
+        #Add the time in queue
+        if [pbs.conf.qtime] and [pbs.conf.start] != 0 {
+            ruby {
+                code => "event.set('pbs.conf.queue_wait_time', (event.get('pbs.conf.start').to_i - event.get('pbs.conf.qtime').to_i))"
+            }
+        }
+    }
+ 
+}
